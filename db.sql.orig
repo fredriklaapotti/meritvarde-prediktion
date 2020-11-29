@@ -1,0 +1,234 @@
+drop table if exists sg;
+drop table if exists clean;
+
+create table sg (
+    sourcename varchar(255),
+    school varchar(255),
+    year varchar(32),
+    class varchar(32),
+    semester varchar(255),
+    schoolyear varchar(255),
+    subject varchar(255),
+    cohort varchar(32),
+    grade varchar(32),
+    points varchar(32),
+    reachedgoals varchar(32),
+    sex varchar(32),
+    mothertongue varchar(255),
+    created varchar(32),
+    updated varchar(32),
+    ssn varchar(32),
+    status varchar(255),
+    transferredgrade varchar(32)
+);
+
+create table clean (
+    ssn char(10),
+    sex varchar(16),
+    mothertongue varchar(64),
+    -- Svenska
+    g6_sv decimal unsigned,
+    g7_sv decimal unsigned,
+    g8_sv char(8),
+    g9_sv char(8),
+    -- Svenska som andraspråk
+    g6_sva char(8),
+    g7_sva char(8),
+    g8_sva char(8),
+    g9_sva char(8),
+    -- Engelska
+    g6_en char(8),
+    g7_en char(8),
+    g8_en char(8),
+    g9_en char(8),
+    -- Matematik
+    g6_ma char(8),
+    g7_ma char(8),
+    g8_ma char(8),
+    g9_ma char(8),
+
+    -- Biologi
+    g6_bi char(8),
+    g7_bi char(8),
+    g8_bi char(8),
+    g9_bi char(8),
+    -- Fysik
+    g6_fy char(8),
+    g7_fy char(8),
+    g8_fy char(8),
+    g9_fy char(8),
+    -- Kemi
+    g6_ke char(8),
+    g7_ke char(8),
+    g8_ke char(8),
+    g9_ke char(8),
+    -- Teknik
+    g6_tk char(8),
+    g7_tk char(8),
+    g8_tk char(8),
+    g9_tk char(8),
+
+    -- Geografi
+    g6_ge char(8),
+    g7_ge char(8),
+    g8_ge char(8),
+    g9_ge char(8),
+    -- Historia
+    g6_hi char(8),
+    g7_hi char(8),
+    g8_hi char(8),
+    g9_hi char(8),
+    -- Religion
+    g6_re char(8),
+    g7_re char(8),
+    g8_re char(8),
+    g9_re char(8),
+    -- Samhällskunskap
+    g6_sh char(8),
+    g7_sh char(8),
+    g8_sh char(8),
+    g9_sh char(8),
+
+    -- Bild
+    g6_bd char(8),
+    g7_bd char(8),
+    g8_bd char(8),
+    g9_bd char(8),
+    -- Hem- och konsumentkunskap
+    g6_hkk char(8),
+    g7_hkk char(8),
+    g8_hkk char(8),
+    g9_hkk char(8),
+    -- Idrott och hälsa
+    g6_idh char(8),
+    g7_idh char(8),
+    g8_idh char(8),
+    g9_idh char(8),
+    -- Musik
+    g6_mu char(8),
+    g7_mu char(8),
+    g8_mu char(8),
+    g9_mu char(8),
+    -- Slöjd
+    g6_sl char(8),
+    g7_sl char(8),
+    g8_sl char(8),
+    g9_sl char(8),
+
+    -- Moderna språk
+    g6_mspr char(8),
+    g7_mspr char(8),
+    g8_mspr char(8),
+    g9_mspr char(8),
+
+    primary key(ssn)
+);
+
+load data local infile '/home/fredrik/projects/python/la-ml/csvnonames.csv' into table sg fields terminated by ';' lines terminated by '\n' ignore 1 rows;
+alter table sg add id int not null auto_increment primary key;
+
+insert into clean(ssn, sex, mothertongue) select distinct ssn, sex, mothertongue from sg;
+--update sg,clean set clean.sex=sg.sex where sg.ssn=clean.ssn;
+--update sg,clean set clean.mothertongue=sg.mothertongue where sg.ssn=clean.ssn;
+
+-- Sv, En, Ma
+
+update clean,sg set clean.g6_sv=replace(sg.points, ',', '.') where sg.ssn=clean.ssn and sg.subject = "Svenska" and sg.year = "6";
+update clean,sg set clean.g7_sv=sg.points where sg.ssn=clean.ssn and sg.subject = "Svenska" and sg.year = "7";
+update clean,sg set clean.g8_sv=sg.points where sg.ssn=clean.ssn and sg.subject = "Svenska" and sg.year = "8";
+update clean,sg set clean.g9_sv=sg.points where sg.ssn=clean.ssn and sg.subject = "Svenska" and sg.year = "9";
+
+update clean,sg set clean.g6_sva=sg.points where sg.ssn=clean.ssn and sg.subject like "Svenska som%" and sg.year = "6";
+update clean,sg set clean.g7_sva=sg.points where sg.ssn=clean.ssn and sg.subject like "Svenska som%" and sg.year = "7";
+update clean,sg set clean.g8_sva=sg.points where sg.ssn=clean.ssn and sg.subject like "Svenska som%" and sg.year = "8";
+update clean,sg set clean.g9_sva=sg.points where sg.ssn=clean.ssn and sg.subject like "Svenska som%" and sg.year = "9";
+
+update clean,sg set clean.g6_en=sg.points where sg.ssn=clean.ssn and sg.subject = "Engelska" and sg.year = "6";
+update clean,sg set clean.g7_en=sg.points where sg.ssn=clean.ssn and sg.subject = "Engelska" and sg.year = "7";
+update clean,sg set clean.g8_en=sg.points where sg.ssn=clean.ssn and sg.subject = "Engelska" and sg.year = "8";
+update clean,sg set clean.g9_en=sg.points where sg.ssn=clean.ssn and sg.subject = "Engelska" and sg.year = "9";
+
+update clean,sg set clean.g6_ma=sg.points where sg.ssn=clean.ssn and sg.subject = "Matematik" and sg.year = "6";
+update clean,sg set clean.g7_ma=sg.points where sg.ssn=clean.ssn and sg.subject = "Matematik" and sg.year = "7";
+update clean,sg set clean.g8_ma=sg.points where sg.ssn=clean.ssn and sg.subject = "Matematik" and sg.year = "8";
+update clean,sg set clean.g9_ma=sg.points where sg.ssn=clean.ssn and sg.subject = "Matematik" and sg.year = "9";
+
+-- NO
+
+update clean,sg set clean.g6_bi=sg.points where sg.ssn=clean.ssn and sg.subject = "Biologi" and sg.year = "6";
+update clean,sg set clean.g7_bi=sg.points where sg.ssn=clean.ssn and sg.subject = "Biologi" and sg.year = "7";
+update clean,sg set clean.g8_bi=sg.points where sg.ssn=clean.ssn and sg.subject = "Biologi" and sg.year = "8";
+update clean,sg set clean.g9_bi=sg.points where sg.ssn=clean.ssn and sg.subject = "Biologi" and sg.year = "9";
+
+update clean,sg set clean.g6_fy=sg.points where sg.ssn=clean.ssn and sg.subject = "Fysik" and sg.year = "6";
+update clean,sg set clean.g7_fy=sg.points where sg.ssn=clean.ssn and sg.subject = "Fysik" and sg.year = "7";
+update clean,sg set clean.g8_fy=sg.points where sg.ssn=clean.ssn and sg.subject = "Fysik" and sg.year = "8";
+update clean,sg set clean.g9_fy=sg.points where sg.ssn=clean.ssn and sg.subject = "Fysik" and sg.year = "9";
+
+update clean,sg set clean.g6_ke=sg.points where sg.ssn=clean.ssn and sg.subject = "Kemi" and sg.year = "6";
+update clean,sg set clean.g7_ke=sg.points where sg.ssn=clean.ssn and sg.subject = "Kemi" and sg.year = "7";
+update clean,sg set clean.g8_ke=sg.points where sg.ssn=clean.ssn and sg.subject = "Kemi" and sg.year = "8";
+update clean,sg set clean.g9_ke=sg.points where sg.ssn=clean.ssn and sg.subject = "Kemi" and sg.year = "9";
+
+update clean,sg set clean.g6_tk=sg.points where sg.ssn=clean.ssn and sg.subject = "Teknik" and sg.year = "6";
+update clean,sg set clean.g7_tk=sg.points where sg.ssn=clean.ssn and sg.subject = "Teknik" and sg.year = "7";
+update clean,sg set clean.g8_tk=sg.points where sg.ssn=clean.ssn and sg.subject = "Teknik" and sg.year = "8";
+update clean,sg set clean.g9_tk=sg.points where sg.ssn=clean.ssn and sg.subject = "Teknik" and sg.year = "9";
+
+-- SO
+
+update clean,sg set clean.g6_ge=sg.points where sg.ssn=clean.ssn and sg.subject = "Geografi" and sg.year = "6";
+update clean,sg set clean.g7_ge=sg.points where sg.ssn=clean.ssn and sg.subject = "Geografi" and sg.year = "7";
+update clean,sg set clean.g8_ge=sg.points where sg.ssn=clean.ssn and sg.subject = "Geografi" and sg.year = "8";
+update clean,sg set clean.g9_ge=sg.points where sg.ssn=clean.ssn and sg.subject = "Geografi" and sg.year = "9";
+
+update clean,sg set clean.g6_hi=sg.points where sg.ssn=clean.ssn and sg.subject = "Historia" and sg.year = "6";
+update clean,sg set clean.g7_hi=sg.points where sg.ssn=clean.ssn and sg.subject = "Historia" and sg.year = "7";
+update clean,sg set clean.g8_hi=sg.points where sg.ssn=clean.ssn and sg.subject = "Historia" and sg.year = "8";
+update clean,sg set clean.g9_hi=sg.points where sg.ssn=clean.ssn and sg.subject = "Historia" and sg.year = "9";
+
+update clean,sg set clean.g6_re=sg.points where sg.ssn=clean.ssn and sg.subject = "Religionskunskap" and sg.year = "6";
+update clean,sg set clean.g7_re=sg.points where sg.ssn=clean.ssn and sg.subject = "Religionskunskap" and sg.year = "7";
+update clean,sg set clean.g8_re=sg.points where sg.ssn=clean.ssn and sg.subject = "Religionskunskap" and sg.year = "8";
+update clean,sg set clean.g9_re=sg.points where sg.ssn=clean.ssn and sg.subject = "Religionskunskap" and sg.year = "9";
+
+update clean,sg set clean.g6_sh=sg.points where sg.ssn=clean.ssn and sg.subject like "Samh%" and sg.year = "6";
+update clean,sg set clean.g7_sh=sg.points where sg.ssn=clean.ssn and sg.subject like "Samh%" and sg.year = "7";
+update clean,sg set clean.g8_sh=sg.points where sg.ssn=clean.ssn and sg.subject like "Samh%" and sg.year = "8";
+update clean,sg set clean.g9_sh=sg.points where sg.ssn=clean.ssn and sg.subject like "Samh%" and sg.year = "9";
+
+-- Praktiska ämnen
+
+update clean,sg set clean.g6_bd=sg.points where sg.ssn=clean.ssn and sg.subject = "Bild" and sg.year = "6";
+update clean,sg set clean.g7_bd=sg.points where sg.ssn=clean.ssn and sg.subject = "Bild" and sg.year = "7";
+update clean,sg set clean.g8_bd=sg.points where sg.ssn=clean.ssn and sg.subject = "Bild" and sg.year = "8";
+update clean,sg set clean.g9_bd=sg.points where sg.ssn=clean.ssn and sg.subject = "Bild" and sg.year = "9";
+
+update clean,sg set clean.g6_hkk=sg.points where sg.ssn=clean.ssn and sg.subject = "Hem- och konsumentkunskap" and sg.year = "6";
+update clean,sg set clean.g7_hkk=sg.points where sg.ssn=clean.ssn and sg.subject = "Hem- och konsumentkunskap" and sg.year = "7";
+update clean,sg set clean.g8_hkk=sg.points where sg.ssn=clean.ssn and sg.subject = "Hem- och konsumentkunskap" and sg.year = "8";
+update clean,sg set clean.g9_hkk=sg.points where sg.ssn=clean.ssn and sg.subject = "Hem- och konsumentkunskap" and sg.year = "9";
+
+update clean,sg set clean.g6_idh=sg.points where sg.ssn=clean.ssn and sg.subject like "Idrott%" and sg.year = "6";
+update clean,sg set clean.g7_idh=sg.points where sg.ssn=clean.ssn and sg.subject like "Idrott%" and sg.year = "7";
+update clean,sg set clean.g8_idh=sg.points where sg.ssn=clean.ssn and sg.subject like "Idrott%" and sg.year = "8";
+update clean,sg set clean.g9_idh=sg.points where sg.ssn=clean.ssn and sg.subject like "Idrott%" and sg.year = "9";
+
+update clean,sg set clean.g6_mu=sg.points where sg.ssn=clean.ssn and sg.subject = "Musik" and sg.year = "6";
+update clean,sg set clean.g7_mu=sg.points where sg.ssn=clean.ssn and sg.subject = "Musik" and sg.year = "7";
+update clean,sg set clean.g8_mu=sg.points where sg.ssn=clean.ssn and sg.subject = "Musik" and sg.year = "8";
+update clean,sg set clean.g9_mu=sg.points where sg.ssn=clean.ssn and sg.subject = "Musik" and sg.year = "9";
+
+update clean,sg set clean.g6_sl=sg.points where sg.ssn=clean.ssn and sg.subject like "Sl%" and sg.year = "6";
+update clean,sg set clean.g7_sl=sg.points where sg.ssn=clean.ssn and sg.subject like "Sl%" and sg.year = "7";
+update clean,sg set clean.g8_sl=sg.points where sg.ssn=clean.ssn and sg.subject like "Sl%" and sg.year = "8";
+update clean,sg set clean.g9_sl=sg.points where sg.ssn=clean.ssn and sg.subject like "Sl%" and sg.year = "9";
+
+-- Moderna språk
+
+-- update clean,sg set clean.g6_mspr=sg.points where sg.ssn=clean.ssn and sg.subject = "Tyska" or sg.subject = "Franska" or sg.subject = "Spanska" and sg.year = "6";
+-- update clean,sg set clean.g7_mspr=sg.points where sg.ssn=clean.ssn and sg.subject = "Tyska" or sg.subject = "Franska" or sg.subject = "Spanska" and sg.year = "7";
+-- update clean,sg set clean.g8_mspr=sg.points where sg.ssn=clean.ssn and sg.subject = "Tyska" or sg.subject = "Franska" or sg.subject = "Spanska" and sg.year = "8";
+-- update clean,sg set clean.g9_mspr=sg.points where sg.ssn=clean.ssn and sg.subject = "Tyska" or sg.subject = "Franska" or sg.subject = "Spanska" and sg.year = "9";
+
+create view full_ma as select * from clean where g6_ma is not null and g7_ma is not null and g8_ma is not null and g9_ma is not null;
