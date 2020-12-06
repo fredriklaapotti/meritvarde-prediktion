@@ -1,3 +1,19 @@
+# -*- coding: utf-8 -*-
+"""meritvarde-prediktion: prediktionsmodeller för meritvärde i åk 9
+
+Bygger på ett dataset med vårterminens betyg från åk 6 - 9 för elever
+födda 1996 - 2008 i Hultsfreds kommun. Data är mer komplett i de senare
+årskurserna jämfört med de tidiga.
+
+Prediktionen bygger på att använda alumners meritvärde i åk 9 för att
+med olika matematiska modeller göra inferens med ofullständig data.
+De modeller som visade bäst tillförlitlighet är linjär regression
+och elastiskt nät. Bayesiansk inferens används som komplement.
+
+Inspiration och logik är till stor del hämtad från:
+https://github.com/WillKoehrsen/Data-Analysis/blob/master/bayesian_lr/Bayesian%20Linear%20Regression%20Project.ipynb
+"""
+
 import mariadb
 import sys
 import pandas as pd
@@ -193,6 +209,58 @@ def model_effect(query_var, trace, X, filename='model_effect.svg'):
     plt.savefig(filename, format='svg')
 
 
+# Make predictions for a new data point from the model trace
+def query_model(trace, new_observation):
+    # Print information about the new observation
+    #print('New Observation')
+    #print(new_observation)
+    # Dictionary of all sampled values for each parameter
+    var_dict = {}
+    for variable in trace.varnames:
+        var_dict[variable] = trace[variable]
+
+    # Standard deviation
+    sd_value = var_dict['sd'].mean()
+
+    # Results into a dataframe
+    var_weights = pd.DataFrame(var_dict)
+
+    # Align weights and new observation
+    var_weights = var_weights[new_observation.index]
+
+    # Means of variables
+    var_means = var_weights.mean(axis=0)
+
+    # Mean for observation
+    mean_loc = np.dot(var_means, new_observation)
+
+    # Distribution of estimates
+    estimates = np.random.normal(loc=mean_loc, scale=sd_value, size=1000)
+
+    """
+    # Plot the estimate distribution
+    #plt.figure(figsize(8, 8))
+    sns.distplot(estimates, hist=True, kde=True, bins=19,
+                 hist_kws={'edgecolor': 'k', 'color': 'darkblue'},
+                 kde_kws={'linewidth': 4},
+                 label='Estimated Dist.')
+    # Plot the mean estimate
+    plt.vlines(x=mean_loc, ymin=0, ymax=5,
+               linestyles='-', colors='orange', linewidth=2.5)
+    plt.title('Density Plot for New Observation');
+    plt.xlabel('Grade')
+    plt.ylabel('Density')
+    plt.show()
+
+    # Estimate information
+    print('Average Estimate = %0.4f' % mean_loc)
+    print('5%% Estimate = %0.4f    95%% Estimate = %0.4f' % (np.percentile(estimates, 5),
+                                                             np.percentile(estimates, 95)))
+    """
+
+    return mean_loc
+
+
 def db_connect(username, password, database, hostname="localhost"):
     try:
         db_connection = mariadb.connect(
@@ -292,29 +360,25 @@ def main():
     model_predictions = saved_best_model.predict(df_current.drop(columns=['ssn', 'sex_enum', 'language_enum']).fillna(0))
 
     # Bayesian model
-    ols_formula, bayesian_formula = get_formulas(X_train, y_train)
-    #normal_trace = bayesian_model(bayesian_formula, df_alumni.drop(columns=['ssn', 'sex_enum', 'language_enum'] + g9_subjects_all).fillna(0))
+    # We use a custom formula since doing inference on all data points is slow (10 minutes). By using only grades
+    # from year 8 we cut it down to ~50 seconds
     bayesian_formula = "meritvarde ~ g8_sv + g8_sva + g8_en + g8_ma + g8_bi + g8_fy + g8_ke + g8_tk + g8_ge + g8_hi + g8_re + g8_sh + g8_bd + g8_hkk + g8_idh + g8_mu + g8_sl"
+    g8_subjects_all = ['g8_sv', 'g8_sva', 'g8_en', 'g8_ma', 'g8_bi', 'g8_fy', 'g8_ke', 'g8_tk',
+                       'g8_ge', 'g8_hi', 'g8_re', 'g8_sh', 'g8_bd', 'g8_hkk', 'g8_idh', 'g8_mu', 'g8_sl']
 
-    normal_trace, pm = bayesian_model(bayesian_formula, df_alumni[['g8_sv', 'g8_sva', 'g8_en', 'g8_ma', 'g8_bi', 'g8_fy', 'g8_ke', 'g8_tk', 'g8_ge', 'g8_hi',
-                       'g8_re', 'g8_sh', 'g8_bd', 'g8_hkk', 'g8_idh', 'g8_mu', 'g8_sl', 'meritvarde']].fillna(0))
+    normal_trace, pm = bayesian_model(bayesian_formula, df_alumni[['meritvarde'] + g8_subjects_all].fillna(0))
+    df_current_bayesian = df_current[g8_subjects_all].fillna(0)
 
-    #pm.traceplot(normal_trace)
-    #fig = plt.gcf()
-    #fig.savefig('traceplot.svg', format='svg')
-
-    #pm.plot_posterior(normal_trace)
-    #plt.show()
-    #fig = plt.gcf()
-    #fig.savefig('posteriorplot.svg', format='svg')
-
-    model_effect('g8_sva', normal_trace, df_alumni[['g8_sv', 'g8_sva', 'g8_en', 'g8_ma', 'g8_bi', 'g8_fy', 'g8_ke', 'g8_tk', 'g8_ge', 'g8_hi',
-                       'g8_re', 'g8_sh', 'g8_bd', 'g8_hkk', 'g8_idh', 'g8_mu', 'g8_sl']].fillna(0))
+    df_current_bayesian.insert(0, 'Intercept', 1)
+    df_current_bayesian['bayespredict'] = df_current_bayesian.apply(lambda row: query_model(normal_trace, row), axis=1)
+    df_current_bayesian = df_current_bayesian[['bayespredict']]
 
     # Dataframe manipulation to get a CSV file with the last column as prediction
     df_current.reset_index(inplace=True, drop=True)
+    df_current_bayesian.reset_index(inplace=True, drop=True)
     current_predictions = pd.DataFrame({'mv-guess-'+model: model_predictions})
     df_current = df_current.join(current_predictions)
+    df_current = df_current.join(df_current_bayesian)
     df_current.to_csv('df_current_bestmodel.csv')
 
 
@@ -436,4 +500,35 @@ eights_full.to_csv('eights_full.csv')
     model_linear_predictions = model_linear.predict(df_current.drop(columns=['ssn', 'sex_enum', 'language_enum']).fillna(0))
     model_elastic_predictions = model_elastic.predict(df_current.drop(columns=['ssn', 'sex_enum', 'language_enum']).fillna(0))
     #current_predictions = pd.DataFrame({'mv-linear': model_linear_predictions, 'mv-elastic': model_elastic_predictions})
+    
+    #observation = pd.Series({'Intercept': 1, 'g8_sv': 10, 'g8_sva': 10, 'g8_en': 10, 'g8_ma': 10, 'g8_bi': 10, 'g8_fy': 10, 'g8_ke': 10, 'g8_tk': 10, 'g8_ge': 10, 'g8_hi': 10,
+                       #'g8_re': 10, 'g8_sh': 10, 'g8_bd': 10, 'g8_hkk': 10, 'g8_idh': 10, 'g8_mu': 10, 'g8_sl': 10})
+    #bayesian_prediction = query_model(normal_trace, observation)
+"""
+
+"""
+normal_trace, pm = bayesian_model(bayesian_formula, df_alumni[['g8_sv', 'g8_sva', 'g8_en', 'g8_ma',
+                                                               'g8_bi', 'g8_fy', 'g8_ke', 'g8_tk', 'g8_ge', 'g8_hi',
+                                                               'g8_re', 'g8_sh', 'g8_bd', 'g8_hkk', 'g8_idh',
+                                                               'g8_mu', 'g8_sl', 'meritvarde']].fillna(0))
+
+
+df_current_bayesian = df_current[['g8_sv', 'g8_sva', 'g8_en', 'g8_ma', 'g8_bi', 'g8_fy', 'g8_ke', 'g8_tk', 'g8_ge',
+                                  'g8_hi', 'g8_re', 'g8_sh', 'g8_bd', 'g8_hkk', 'g8_idh', 'g8_mu', 'g8_sl']].fillna(0)
+"""
+
+"""
+# Produce trace- and posterior plots
+pm.traceplot(normal_trace)
+fig = plt.gcf()
+fig.savefig('traceplot.svg', format='svg')
+
+pm.plot_posterior(normal_trace)
+fig = plt.gcf()
+fig.savefig('posteriorplot.svg', format='svg')
+"""
+
+"""
+model_effect('g8_sv', normal_trace, df_alumni[['g8_sv', 'g8_sva', 'g8_en', 'g8_ma', 'g8_bi', 'g8_fy', 'g8_ke', 'g8_tk', 'g8_ge', 'g8_hi',
+                   'g8_re', 'g8_sh', 'g8_bd', 'g8_hkk', 'g8_idh', 'g8_mu', 'g8_sl']].fillna(0))
 """
