@@ -2,78 +2,416 @@ import mariadb
 import sys
 import pandas as pd
 import numpy as np
+import pickle
 import sklearn
 from sklearn import linear_model
+
+from sklearn.model_selection import train_test_split
+import matplotlib.pyplot as plt
+plt.rcParams['font.size'] = 10
+plt.rcParams['figure.figsize'] = (9, 9)
+import seaborn as sns
 from sklearn.utils import shuffle
 
-try:
-    conn = mariadb.connect(
-        user="fredrik",
-        password="fredrik",
-        host="localhost",
-        database="fredrik"
-    )
-except mariadb.Error as e:
-    print(f"Error: {e}")
-    sys.exit(1)
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.linear_model import ElasticNet
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import ExtraTreesRegressor
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.svm import SVR
 
-cur = conn.cursor()
-query = "select * from clean"
-df = pd.read_sql_query(query, conn)
+import pymc3 as pm
 
-df['sex_enum'] = np.where(df['sex'] == "Kvinna", 0, 1) # Kvinna = 0, Man = 1
-df['language_enum'] = np.where(df['mothertongue'] == "Svenska", 0, 1) # Svenska = 0, annat språk = 1
-df['total_points'] = df.drop(['ssn', 'sex', 'mothertongue', 'sex_enum', 'language_enum'], axis=1).sum(axis=1)
+from sklearn.metrics import mean_squared_error, mean_absolute_error, median_absolute_error
 
+
+def evaluate_predictions(predictions, real):
+    mae = np.mean(abs(predictions - real))
+    rmse = np.sqrt(np.mean((predictions - real) ** 2))
+
+    return mae, rmse
+
+
+def evaluate_models_test(X, y, repeat):
+    model_name_list = ['Linear regression', 'Gradient boosted', 'Elastic net', 'Random forest', 'Extra trees', 'SVR']
+
+    model1 = LinearRegression()
+    model2 = GradientBoostingRegressor(n_estimators=20)
+    model3 = ElasticNet(alpha=1.0, l1_ratio=0.5)
+    model4 = RandomForestRegressor(n_estimators=50)
+    model5 = ExtraTreesRegressor(n_estimators=50)
+    model6 = SVR(kernel='rbf', degree=3, C=1.0, gamma='auto')
+
+    results = pd.DataFrame(columns=['mae', 'rmse'], index=model_name_list)
+
+    best = 50
+
+    for _ in range(repeat):
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1)
+
+        for i, model in enumerate([model1, model2, model3, model4, model5, model6]):
+            model.fit(X_train, y_train)
+            predictions = model.predict(X_test)
+
+            # Metrics
+            mae, rmse = evaluate_predictions(predictions, y_test)
+
+            model_name = model_name_list[i]
+            results.loc[model_name, :] = [mae, rmse]
+
+            mae_value = results['mae'].sort_values().values[0]
+            #print(mae_value)
+            if mae_value < best:
+                best = mae_value
+                print("new best")
+                with open("meritvarde-predition.pickle", "wb") as f:
+                    pickle.dump(model, f)
+
+    baseline = np.median(y_train)
+    baseline_mae, baseline_rmse = evaluate_predictions(baseline, y_test)
+    results.loc['Baseline', :] = [baseline_mae, baseline_rmse]
+    print("Best: ", best)
+
+    return results
+
+
+def evaluate_models(X_train, X_test, y_train, y_test):
+    model_name_list = ['Linear regression', 'Gradient boosted', 'Elastic net', 'Random forest', 'Extra trees', 'SVR']
+
+    model1 = LinearRegression()
+    model2 = GradientBoostingRegressor(n_estimators=20)
+    model3 = ElasticNet(alpha=1.0, l1_ratio=0.5)
+    model4 = RandomForestRegressor(n_estimators=50)
+    model5 = ExtraTreesRegressor(n_estimators=50)
+    model6 = SVR(kernel='rbf', degree=3, C=1.0, gamma='auto')
+
+    results = pd.DataFrame(columns=['mae', 'rmse'], index=model_name_list)
+
+    for i, model in enumerate([model1, model2, model3, model4, model5, model6]):
+        model.fit(X_train, y_train)
+        predictions = model.predict(X_test)
+
+        # Metrics
+        mae, rmse = evaluate_predictions(predictions, y_test)
+
+        model_name = model_name_list[i]
+        results.loc[model_name, :] = [mae, rmse]
+
+    baseline = np.median(y_train)
+    baseline_mae, baseline_rmse = evaluate_predictions(baseline, y_test)
+    results.loc['Baseline', :] = [baseline_mae, baseline_rmse]
+
+    return results
+
+
+def compare_models(results):
+    fig, ax = plt.subplots()
+    x = np.arange(len(results.index))
+    width = 0.3
+    ax.bar(x - width/2, results['mae'].sort_values(ascending=True), width, color='b', label='Mean Absolute Error')
+    ax.bar(x + width/2, results['rmse'], width, color='g', label='Root Mean Squared Error')
+    ax.set_title("MAE and RMSE evaulation of models\nLower = better")
+    ax.set_xlabel("Model")
+    ax.set_ylabel("MAE and RMSE")
+    ax.set_xticks(x)
+    ax.set_xticklabels(results.sort_values('mae', ascending=True).index)
+    ax.legend()
+    fig.tight_layout()
+    plt.savefig("mae-rmse.svg", format='svg')
+    plt.show()
+
+
+def print_formulas(X_train, y_train):
+    lr = LinearRegression()
+    lr.fit(X_train, y_train)
+    ols_formula = 'Meritvarde = %0.2f +' % lr.intercept_
+    for i, col in enumerate(X_train):
+        ols_formula += ' %0.2f * %s +' % (lr.coef_[i], col)
+    print(' '.join(ols_formula.split(' ')[:-1]))
+    bayesian_formula = 'meritvarde ~ ' + ' + '.join(['%s' % variable for variable in X_train.columns[0:]])
+    print(bayesian_formula)
+
+
+def bayesian_model(bayesian_formula, dataframe):
+    with pm.Model() as normal_model:
+        # The prior for the model parameters will be a normal distribution
+        family = pm.glm.families.Normal()
+
+        # Creating the model requires a formula and data (and optionally a family)
+        pm.GLM.from_formula(bayesian_formula, data=dataframe, family=family)
+
+        # Perform Markov Chain Monte Carlo sampling
+        normal_trace = pm.sample(draws=2000, chains=2, tune=2000)
+
+        for variable in normal_trace.varnames:
+            print('Variable: {:15} Mean weight in model: {:.4f}'.format(variable, np.mean(normal_trace[variable])))
+
+
+def db_connect(username, password, database, hostname="localhost"):
+    try:
+        db_connection = mariadb.connect(
+            user=username,
+            password=password,
+            host=hostname,
+            database=database
+        )
+    except mariadb.Error as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    return db_connection
+
+
+def get_dataframe(db_connection, db_query):
+    db_cursor = db_connection.cursor()
+    dataframe = pd.read_sql_query(db_query, db_connection)
+    return dataframe
+
+
+def clean_dataframe(dataframe):
+    dataframe['sex_enum'] = np.where(dataframe['sex'] == "Kvinna", 0, 1)  # Kvinna = 0, Man = 1
+    dataframe['language_enum'] = np.where(dataframe['mothertongue'] == "Svenska", 0, 1)  # Svenska = 0, annat språk = 1
+    dataframe = dataframe.drop(columns=["sex", "mothertongue"])
+
+    dataframe = dataframe[['ssn',
+                           'sex_enum',
+                           'language_enum',
+                           'g6_sv',
+                           'g6_sva',
+                           'g6_en',
+                           'g6_ma',
+                           'g6_bi',
+                           'g6_fy',
+                           'g6_ke',
+                           'g6_tk',
+                           'g6_ge',
+                           'g6_hi',
+                           'g6_re',
+                           'g6_sh',
+                           'g6_bd',
+                           'g6_hkk',
+                           'g6_idh',
+                           'g6_mu',
+                           'g6_sl',
+                           #'g6_mspr',
+                           'g7_sv',
+                           'g7_sva',
+                           'g7_en',
+                           'g7_ma',
+                           'g7_bi',
+                           'g7_fy',
+                           'g7_ke',
+                           'g7_tk',
+                           'g7_ge',
+                           'g7_hi',
+                           'g7_re',
+                           'g7_sh',
+                           'g7_bd',
+                           'g7_hkk',
+                           'g7_idh',
+                           'g7_mu',
+                           'g7_sl',
+                           #'g7_mspr',
+                           'g8_sv',
+                           'g8_sva',
+                           'g8_en',
+                           'g8_ma',
+                           'g8_bi',
+                           'g8_fy',
+                           'g8_ke',
+                           'g8_tk',
+                           'g8_ge',
+                           'g8_hi',
+                           'g8_re',
+                           'g8_sh',
+                           'g8_bd',
+                           'g8_hkk',
+                           'g8_idh',
+                           'g8_mu',
+                           'g8_sl',
+                           #'g8_mspr',
+                           'g9_sv',
+                           'g9_sva',
+                           'g9_en',
+                           'g9_ma',
+                           'g9_bi',
+                           'g9_fy',
+                           'g9_ke',
+                           'g9_tk',
+                           'g9_ge',
+                           'g9_hi',
+                           'g9_re',
+                           'g9_sh',
+                           'g9_bd',
+                           'g9_hkk',
+                           'g9_idh',
+                           'g9_mu',
+                           'g9_sl',
+                           #'g9_mspr'
+                           ]]
+    return dataframe
+
+
+def main():
+    # NumPy and Panda truncates arrays and dataframes by default
+    np.set_printoptions(threshold=np.inf)
+    pd.set_option('display.width', None)
+    pd.set_option('display.max_columns', None)
+    pd.set_option('display.max_rows', None)
+
+    # Fetch a Panda dataframe with all rows and columns from the clean database table.
+    conn = db_connect("fredrik", "fredrik", "fredrik", "localhost")
+    df_all = get_dataframe(conn, "select * from clean")
+    df_all = clean_dataframe(df_all)
+
+    # Divide into dataframes suitable for regression. This makes code more readable later on.
+    df_alumni = df_all[df_all["ssn"].str.match('^04.*|03.*|02.*|01.*|00.*|99.*|98.*|97.*|96.*') == True].copy()
+    df_current = df_all[df_all["ssn"].str.match('^05.*') == True].copy()
+    df_younger = df_all[df_all["ssn"].str.match('^08.*|07.*|^06.*') == True].copy()
+
+    # Filter students who have somewhat complete grading, for ML purposes
+    # Dropping alumni without grades in Ma and En results in a smaller dataset but enables
+    # training the model with suitable student data instead of many null values
+    g9_subjects_all = ['g9_sv', 'g9_sva', 'g9_en', 'g9_ma', 'g9_bi', 'g9_fy', 'g9_ke', 'g9_tk', 'g9_ge', 'g9_hi',
+                       'g9_re', 'g9_sh', 'g9_bd', 'g9_hkk', 'g9_idh', 'g9_mu', 'g9_sl']
+    df_younger.dropna(subset=['g6_ma', 'g6_en'], inplace=True)
+    df_current.dropna(subset=['g8_ma', 'g8_en'], inplace=True)
+    df_current.drop(columns=g9_subjects_all, inplace=True)
+    df_alumni.dropna(subset=['g9_ma', 'g9_en', 'g8_ma', 'g8_en', 'g7_ma', 'g7_en', 'g6_ma', 'g6_en'], inplace=True)
+
+    # Calculate merit value for all alumni based on the 16 subjects (17 including Sv/SvA)
+    # We've excluded tertiary language because of too few samples from grade 6
+    # 16 subjects (with grades) = 16 * 20 = 340 max
+    df_alumni['meritvarde'] = df_alumni[g9_subjects_all].sum(axis=1)
+
+    predict = 'meritvarde'
+
+    # Order of labels for prediction:
+    # g6_subj1 .. g6_subj17, g7_subj1 .. g7_subj17, g8_subj1 .. g8_subj17
+    X = df_alumni.drop(columns=['ssn', 'sex_enum', 'language_enum', predict] + g9_subjects_all).fillna(0).copy()
+    y = np.array(df_alumni[predict])
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1)
+    results = evaluate_models(X_train, X_test, y_train, y_test)
+    print(results.sort_values('mae'))
+
+    model_linear = LinearRegression(); model_linear.fit(X_train, y_train)
+    model_elastic = ElasticNet(alpha=1.0, l1_ratio=0.5).fit(X_train, y_train); model_elastic.fit(X_train, y_train)
+
+    model_linear_predictions = model_linear.predict(df_current.drop(columns=['ssn', 'sex_enum', 'language_enum']).fillna(0))
+    model_elastic_predictions = model_elastic.predict(df_current.drop(columns=['ssn', 'sex_enum', 'language_enum']).fillna(0))
+
+    df_current.reset_index(inplace=True, drop=True)
+    current_predictions = pd.DataFrame({'mv-linear': model_linear_predictions, 'mv-elastic': model_elastic_predictions})
+    df_current = df_current.join(current_predictions)
+    df_current.to_csv('df_current.csv')
+
+
+if __name__ == "__main__":
+    main()
+
+"""
+# Keep in case we need it later
+#df_full['total_points'] = df_full.drop(['ssn', 'sex', 'mothertongue', 'sex_enum', 'language_enum'], axis=1).sum(axis=1)
+
+#cols = df_full.columns.tolist()
+#cols.insert(1, cols.pop(cols.index('sex_enum')))
+#cols.insert(2, cols.pop(cols.index('language_enum')))
+#df_full = df_full.loc[:, cols]
+#print(df_alumni.corr(method='pearson')['meritvarde'].sort_values())
+#X = np.nan_to_num(np.array(df_alumni.drop(['ssn', 'sex_enum', 'language_enum', predict] + g9_subjects_all, 1)))
+#bayesian_model(bayesian_formula, df_alumni.drop(columns=['ssn', 'sex_enum', 'language_enum'] + g9_subjects_all).fillna(0))
 younger = df[df["ssn"].str.match('^06.*|^07.*') == True].copy()
 
 eights = df[df["ssn"].str.match('^05.*') == True].copy()
 eights.dropna(subset=['g8_ma'])
 
 alumnis = df[df["ssn"].str.match('^04.*|03.*|02.*|01.*|00.*|99.*|98.*|97.*') == True].copy()
-alumnis.dropna(subset=['g8_ma', 'g9_ma'], inplace=True) # Only keep students who actually got a grade in year 8 and 9
+alumnis.dropna(subset=['g8_ma', 'g9_ma'], inplace=True)  # Only keep students who actually got a grade in year 8 and 9
 
-g9_subjects_all = ['g9_sv', 'g9_sva', 'g9_en', 'g9_ma', 'g9_bi', 'g9_fy', 'g9_ke', 'g9_tk', 'g9_ge', 'g9_hi', 'g9_re', 'g9_sh', 'g9_bd', 'g9_hkk', 'g9_idh', 'g9_mu', 'g9_sl', 'g9_mspr']
+g9_subjects_all = ['g9_sv', 'g9_sva', 'g9_en', 'g9_ma', 'g9_bi', 'g9_fy', 'g9_ke', 'g9_tk', 'g9_ge', 'g9_hi', 'g9_re',
+                   'g9_sh', 'g9_bd', 'g9_hkk', 'g9_idh', 'g9_mu', 'g9_sl', 'g9_mspr']
 g9_subjects_core = ['g9_sv', 'g9_sva', 'g9_en', 'g9_ma']
 
-alumnis['meritvarde'] = alumnis[g9_subjects_all].sum(axis=1) # 16 subjects + Mspr = 17 * 20 = 340 max
+alumnis['meritvarde'] = alumnis[g9_subjects_all].sum(axis=1)  # 16 subjects + Mspr = 17 * 20 = 340 max
+# plt.bar(alumnis['meritvarde'].value_counts().index, alumnis['meritvarde'].value_counts().values, fill='navy', edgecolor='k', width=1)
+# plt.xlabel('Meritvärde')
+# plt.ylabel('Antal elever')
+# plt.yticks(np.arange(0, 21, 3))
+# plt.title("Alumners distribution av meritvärde")
+# plt.show()
+
+# Grade distribution by address
+# sns.kdeplot(alumnis.loc[df['language_enum'] == 0, 'meritvarde'], label = "Svenska", shade = True)
+# sns.kdeplot(alumnis.loc[df['language_enum'] == 1, 'meritvarde'], label = "Annat", shade = True)
+# plt.xlabel('Meritvärde'); plt.ylabel('Densitet'); plt.title('Densitetsplot av meritvärde och språk');
+# plt.legend()
+# plt.show()
+
+# print(alumnis.corr()['meritvarde'].sort_values())
+# print(alumnis[['g8_sv', 'g8_sva', 'g8_en', 'g8_ma', 'g8_bi', 'g8_fy', 'g8_ke', 'g8_tk', 'g8_ge', 'g8_hi', 'g8_re', 'g8_sh', 'g8_bd', 'g8_hkk', 'g8_idh', 'g8_mu', 'g8_sl', 'g8_mspr', 'meritvarde']].corr()['meritvarde'].sort_values())
+
 predict = "meritvarde"
 
-#X = np.nan_to_num(np.array(df.drop(['ssn', 'sex', 'mothertongue', 'sex_enum', 'language_enum', predict], 1)))
-#X = np.nan_to_num(np.array(alumnis[['g6_sv', 'g6_sva', 'g6_en', 'g6_ma', 'g7_sv', 'g7_sva', 'g7_en', 'g7_ma', 'g8_sv', 'g8_sva', 'g8_en', 'g8_ma']]))
-X = np.nan_to_num(np.array(alumnis[['g8_sv', 'g8_sva', 'g8_en', 'g8_ma', 'g8_bi', 'g8_fy', 'g8_ke', 'g8_tk', 'g8_ge', 'g8_hi', 'g8_re', 'g8_sh', 'g8_bd', 'g8_hkk', 'g8_idh', 'g8_mu', 'g8_sl', 'g8_mspr']]))
+# alumnis.drop(['ssn', 'sex', 'mothertongue', 'meritvarde', 'total_points', 'g9_sv', 'g9_sva', 'g9_en', 'g9_ma', 'g9_bi', 'g9_fy', 'g9_ke', 'g9_tk', 'g9_ge', 'g9_hi', 'g9_re', 'g9_sh', 'g9_bd', 'g9_hkk', 'g9_idh', 'g9_mu', 'g9_sl', 'g9_mspr'], 1).info()
+
+# X = np.nan_to_num(np.array(alumnis[['sex_enum', 'language_enum', 'g6_sv', 'g6_sva', 'g6_en', 'g6_ma', 'g7_sv', 'g7_sva', 'g7_en', 'g7_ma', 'g8_sv', 'g8_sva', 'g8_en', 'g8_ma']]))
+# X = np.nan_to_num(np.array(alumnis.drop(['ssn', 'sex', 'mothertongue', 'meritvarde', 'g9_sv', 'g9_sva', 'g9_en', 'g9_ma', 'g9_bi', 'g9_fy', 'g9_ke', 'g9_tk', 'g9_ge', 'g9_hi', 'g9_re', 'g9_sh', 'g9_bd', 'g9_hkk', 'g9_idh', 'g9_mu', 'g9_sl', 'g9_mspr'], 1)))
+X = np.nan_to_num(np.array(alumnis.drop(
+    ['ssn', 'sex', 'mothertongue', 'meritvarde', 'total_points', 'g9_sv', 'g9_sva', 'g9_en', 'g9_ma', 'g9_bi', 'g9_fy',
+     'g9_ke', 'g9_tk', 'g9_ge', 'g9_hi', 'g9_re', 'g9_sh', 'g9_bd', 'g9_hkk', 'g9_idh', 'g9_mu', 'g9_sl', 'g9_mspr'],
+    1)))
+# X = np.nan_to_num(np.array(alumnis[['g6_sv', 'g6_sva', 'g6_en', 'g6_ma', 'g7_sv', 'g7_sva', 'g7_en', 'g7_ma', 'g8_sv', 'g8_sva', 'g8_en', 'g8_ma']]))
+# X = np.nan_to_num(np.array(alumnis[['g8_sv', 'g8_sva', 'g8_en', 'g8_ma', 'g8_bi', 'g8_fy', 'g8_ke', 'g8_tk', 'g8_ge', 'g8_hi', 'g8_re', 'g8_sh', 'g8_bd', 'g8_hkk', 'g8_idh', 'g8_mu', 'g8_sl', 'g8_mspr']]))
 y = np.array(alumnis[predict])
 
+# x_train, x_test, y_train, y_test = train_test_split(X, y, test_size=0.1)
+# results = evaluate_models(x_train, x_test, y_train, y_test)
+# print(results)
+
 linear = linear_model.LinearRegression()
+# linear.fit(x_train, y_train)
 best = 0
+
 for _ in range(30):
     x_train, x_test, y_train, y_test = sklearn.model_selection.train_test_split(X, y, test_size=0.1)
+    results = evaluate_models(x_train, x_test, y_train, y_test)
+    print(results)
 
     # Train the model and save it to Pickle file
     linear.fit(x_train, y_train)
     acc = linear.score(x_test, y_test)
-    print(acc)
+    # print(acc)
 
     if acc > best:
         best = acc
 
 print("\nCoefficient: ", linear.coef_)
-print("Intercept: ", linear.intercept_ )
+print("Intercept: ", linear.intercept_)
 print("Best: ", best)
 
 predictions = linear.predict(x_test)
 
-predictions_file = open("predictions2.txt", "w+")
-#for x in range(len(predictions)):
-#    print(" Grades: ", format(x_test[x]), " Guess: {:.2f}".format(predictions[x]), " Real: ", y_test[x], "::", "Diff: {:.2f}".format(y_test[x]-predictions[x]))
+# predictions_file = open("predictions2.txt", "w+")
+for x in range(len(predictions)):
+    # print(" Guess: {:.2f}".format(predictions[x]), " Real: ", y_test[x], "::", "Diff: {:.2f}".format(y_test[x]-predictions[x]))
+    print(" Grades: ", format(x_test[x]), " Guess: {:.2f}".format(predictions[x]), " Real: ", y_test[x], "::",
+          "Diff: {:.2f}".format(y_test[x] - predictions[x]))
 #    print(",{:.2f}".format(predictions[x]), ",", y_test[x], ",{:.2f}".format(y_test[x] - predictions[x]), file=predictions_file)
-predictions_file.close()
+# predictions_file.close()
+
 
 eights.reset_index(inplace=True, drop=True)
-#eights_predictions = linear.predict(eights[['g6_sv', 'g7_sv', 'g8_sv', 'g9_sv', 'g6_sva', 'g7_sva', 'g8_sva', 'g9_sva', 'g6_en', 'g7_en', 'g8_en', 'g9_en', 'g6_ma', 'g7_ma', 'g8_ma', 'g9_ma']].fillna(0))
-eights_predictions = linear.predict(eights[['g8_sv', 'g8_sva', 'g8_en', 'g8_ma', 'g8_bi', 'g8_fy', 'g8_ke', 'g8_tk', 'g8_ge', 'g8_hi', 'g8_re', 'g8_sh', 'g8_bd', 'g8_hkk', 'g8_idh', 'g8_mu', 'g8_sl', 'g8_mspr']].fillna(0))
+# eights_predictions = linear.predict(eights[['g6_sv', 'g7_sv', 'g8_sv', 'g9_sv', 'g6_sva', 'g7_sva', 'g8_sva', 'g9_sva', 'g6_en', 'g7_en', 'g8_en', 'g9_en', 'g6_ma', 'g7_ma', 'g8_ma', 'g9_ma']].fillna(0))
+# eights_predictions = linear.predict(eights[['g8_sv', 'g8_sva', 'g8_en', 'g8_ma', 'g8_bi', 'g8_fy', 'g8_ke', 'g8_tk', 'g8_ge', 'g8_hi', 'g8_re', 'g8_sh', 'g8_bd', 'g8_hkk', 'g8_idh', 'g8_mu', 'g8_sl', 'g8_mspr']].fillna(0))
+eights_predictions = linear.predict(eights.drop(
+    ['ssn', 'sex', 'mothertongue', 'total_points', 'g9_sv', 'g9_sva', 'g9_en', 'g9_ma', 'g9_bi', 'g9_fy', 'g9_ke',
+     'g9_tk', 'g9_ge', 'g9_hi', 'g9_re', 'g9_sh', 'g9_bd', 'g9_hkk', 'g9_idh', 'g9_mu', 'g9_sl', 'g9_mspr'], 1).fillna(
+    0))
 eights_guess = pd.DataFrame({'g9_meritvarde_guess': eights_predictions})
 
 eights_full = eights.join(eights_guess)
 eights_full = eights_full[['ssn', 'g9_meritvarde_guess']]
 eights_full.to_csv('eights_full.csv')
+"""
