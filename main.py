@@ -8,6 +8,7 @@ from sklearn import linear_model
 
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
+from matplotlib.pyplot import figure
 plt.rcParams['font.size'] = 10
 plt.rcParams['figure.figsize'] = (9, 9)
 import seaborn as sns
@@ -25,6 +26,7 @@ import pymc3 as pm
 
 from sklearn.metrics import mean_squared_error, mean_absolute_error, median_absolute_error
 
+model_filename = 'meritvarde-prediktion.pickle'
 
 def evaluate_predictions(predictions, real):
     mae = np.mean(abs(predictions - real))
@@ -33,7 +35,7 @@ def evaluate_predictions(predictions, real):
     return mae, rmse
 
 
-def evaluate_models_test(X, y, repeat):
+def evaluate_models_iterate(X, y, repeat=5):
     model_name_list = ['Linear regression', 'Gradient boosted', 'Elastic net', 'Random forest', 'Extra trees', 'SVR']
 
     model1 = LinearRegression()
@@ -44,11 +46,14 @@ def evaluate_models_test(X, y, repeat):
     model6 = SVR(kernel='rbf', degree=3, C=1.0, gamma='auto')
 
     results = pd.DataFrame(columns=['mae', 'rmse'], index=model_name_list)
+    best_mae = 50
+    xtr, xte, ytr, yte = train_test_split(X, y, test_size=0.1)
 
-    best = 50
+    print("Repeating", repeat, "times with", len(model_name_list), "models to find best performer..")
 
-    for _ in range(repeat):
+    for x in range(repeat):
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1)
+        print("Evaluating models with different splits, round", x, "/", repeat, "..")
 
         for i, model in enumerate([model1, model2, model3, model4, model5, model6]):
             model.fit(X_train, y_train)
@@ -59,21 +64,20 @@ def evaluate_models_test(X, y, repeat):
 
             model_name = model_name_list[i]
             results.loc[model_name, :] = [mae, rmse]
-
             mae_value = results['mae'].sort_values().values[0]
-            #print(mae_value)
-            if mae_value < best:
-                best = mae_value
-                print("new best")
-                with open("meritvarde-predition.pickle", "wb") as f:
-                    pickle.dump(model, f)
+
+            if mae_value < best_mae:
+                best_mae = mae_value; best_model = model_name
+                xtr, xte, ytr, yte = X_train, X_test, y_train, y_test
+                print("New best! MAE:", mae_value, "Model:", model_name, "Saving to pickle file..")
+                pickle.dump(model, open(model_filename, 'wb'))
 
     baseline = np.median(y_train)
     baseline_mae, baseline_rmse = evaluate_predictions(baseline, y_test)
     results.loc['Baseline', :] = [baseline_mae, baseline_rmse]
-    print("Best: ", best)
+    print("Lowest MAE:", best_mae, "achieved with", best_model)
 
-    return results
+    return xtr, xte, ytr, yte, best_model, best_mae
 
 
 def evaluate_models(X_train, X_test, y_train, y_test):
@@ -122,15 +126,16 @@ def compare_models(results):
     plt.show()
 
 
-def print_formulas(X_train, y_train):
+def get_formulas(X_train, y_train):
     lr = LinearRegression()
     lr.fit(X_train, y_train)
     ols_formula = 'Meritvarde = %0.2f +' % lr.intercept_
     for i, col in enumerate(X_train):
         ols_formula += ' %0.2f * %s +' % (lr.coef_[i], col)
-    print(' '.join(ols_formula.split(' ')[:-1]))
+    #print(' '.join(ols_formula.split(' ')[:-1]))
     bayesian_formula = 'meritvarde ~ ' + ' + '.join(['%s' % variable for variable in X_train.columns[0:]])
-    print(bayesian_formula)
+    #print(bayesian_formula)
+    return ols_formula, bayesian_formula
 
 
 def bayesian_model(bayesian_formula, dataframe):
@@ -144,8 +149,48 @@ def bayesian_model(bayesian_formula, dataframe):
         # Perform Markov Chain Monte Carlo sampling
         normal_trace = pm.sample(draws=2000, chains=2, tune=2000)
 
+        """
         for variable in normal_trace.varnames:
             print('Variable: {:15} Mean weight in model: {:.4f}'.format(variable, np.mean(normal_trace[variable])))
+        """
+
+        return normal_trace, pm
+
+
+# Examines the effect of changing a single variable
+# Takes in the name of the variable, the trace, and the data
+def model_effect(query_var, trace, X, filename='model_effect.svg'):
+    # Variables that do not change
+    steady_vars = list(X.columns)
+    steady_vars.remove(query_var)
+
+    # Linear Model that estimates a grade based on the value of the query variable
+    # and one sample from the trace
+    def lm(value, sample):
+        # Prediction is the estimate given a value of the query variable
+        prediction = sample['Intercept'] + sample[query_var] * value
+
+        # Each non-query variable is assumed to be at the median value
+        for var in steady_vars:
+            # Multiply the weight by the median value of the variable
+            prediction += sample[var] * X[var].median()
+
+        return prediction
+
+    # Find the minimum and maximum values for the range of the query var
+    var_min = X[query_var].min()
+    var_max = X[query_var].max()
+
+    # Plot the estimated grade versus the range of query variable
+    pm.plot_posterior_predictive_glm(trace, eval=np.linspace(var_min, var_max, 100),
+                                     lm=lm, samples=100, color='blue',
+                                     alpha=0.4, lw=2)
+
+    # Plot formatting
+    plt.xlabel('%s' % query_var, size=16)
+    plt.ylabel('Meritvärde', size=16)
+    plt.title("Korrelation av meritvärde vs %s" % query_var, size=18)
+    plt.savefig(filename, format='svg')
 
 
 def db_connect(username, password, database, hostname="localhost"):
@@ -174,80 +219,26 @@ def clean_dataframe(dataframe):
     dataframe['language_enum'] = np.where(dataframe['mothertongue'] == "Svenska", 0, 1)  # Svenska = 0, annat språk = 1
     dataframe = dataframe.drop(columns=["sex", "mothertongue"])
 
-    dataframe = dataframe[['ssn',
-                           'sex_enum',
-                           'language_enum',
-                           'g6_sv',
-                           'g6_sva',
-                           'g6_en',
-                           'g6_ma',
-                           'g6_bi',
-                           'g6_fy',
-                           'g6_ke',
-                           'g6_tk',
-                           'g6_ge',
-                           'g6_hi',
-                           'g6_re',
-                           'g6_sh',
-                           'g6_bd',
-                           'g6_hkk',
-                           'g6_idh',
-                           'g6_mu',
-                           'g6_sl',
+    dataframe = dataframe[['ssn', 'sex_enum', 'language_enum',
+                           'g6_sv', 'g6_sva', 'g6_en', 'g6_ma',
+                           'g6_bi', 'g6_fy', 'g6_ke', 'g6_tk',
+                           'g6_ge', 'g6_hi', 'g6_re', 'g6_sh',
+                           'g6_bd', 'g6_hkk', 'g6_idh', 'g6_mu', 'g6_sl',
                            #'g6_mspr',
-                           'g7_sv',
-                           'g7_sva',
-                           'g7_en',
-                           'g7_ma',
-                           'g7_bi',
-                           'g7_fy',
-                           'g7_ke',
-                           'g7_tk',
-                           'g7_ge',
-                           'g7_hi',
-                           'g7_re',
-                           'g7_sh',
-                           'g7_bd',
-                           'g7_hkk',
-                           'g7_idh',
-                           'g7_mu',
-                           'g7_sl',
+                           'g7_sv', 'g7_sva', 'g7_en', 'g7_ma',
+                           'g7_bi', 'g7_fy', 'g7_ke', 'g7_tk',
+                           'g7_ge', 'g7_hi', 'g7_re', 'g7_sh',
+                           'g7_bd', 'g7_hkk', 'g7_idh', 'g7_mu', 'g7_sl',
                            #'g7_mspr',
-                           'g8_sv',
-                           'g8_sva',
-                           'g8_en',
-                           'g8_ma',
-                           'g8_bi',
-                           'g8_fy',
-                           'g8_ke',
-                           'g8_tk',
-                           'g8_ge',
-                           'g8_hi',
-                           'g8_re',
-                           'g8_sh',
-                           'g8_bd',
-                           'g8_hkk',
-                           'g8_idh',
-                           'g8_mu',
-                           'g8_sl',
+                           'g8_sv', 'g8_sva', 'g8_en', 'g8_ma',
+                           'g8_bi', 'g8_fy', 'g8_ke', 'g8_tk',
+                           'g8_ge', 'g8_hi', 'g8_re', 'g8_sh',
+                           'g8_bd', 'g8_hkk', 'g8_idh', 'g8_mu', 'g8_sl',
                            #'g8_mspr',
-                           'g9_sv',
-                           'g9_sva',
-                           'g9_en',
-                           'g9_ma',
-                           'g9_bi',
-                           'g9_fy',
-                           'g9_ke',
-                           'g9_tk',
-                           'g9_ge',
-                           'g9_hi',
-                           'g9_re',
-                           'g9_sh',
-                           'g9_bd',
-                           'g9_hkk',
-                           'g9_idh',
-                           'g9_mu',
-                           'g9_sl',
+                           'g9_sv', 'g9_sva', 'g9_en', 'g9_ma',
+                           'g9_bi', 'g9_fy', 'g9_ke', 'g9_tk',
+                           'g9_ge', 'g9_hi', 'g9_re', 'g9_sh',
+                           'g9_bd', 'g9_hkk', 'g9_idh', 'g9_mu', 'g9_sl',
                            #'g9_mspr'
                            ]]
     return dataframe
@@ -292,20 +283,39 @@ def main():
     X = df_alumni.drop(columns=['ssn', 'sex_enum', 'language_enum', predict] + g9_subjects_all).fillna(0).copy()
     y = np.array(df_alumni[predict])
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1)
-    results = evaluate_models(X_train, X_test, y_train, y_test)
-    print(results.sort_values('mae'))
+    # Evaluate all models by iterating and saving the best results based on mean average error to Pickle file
+    X_train, X_test, y_train, y_test, model, mae = evaluate_models_iterate(X, y, repeat=2)
 
-    model_linear = LinearRegression(); model_linear.fit(X_train, y_train)
-    model_elastic = ElasticNet(alpha=1.0, l1_ratio=0.5).fit(X_train, y_train); model_elastic.fit(X_train, y_train)
+    # Load the best saved non-Bayesian model from the evaluation for predicting current student cohort
+    saved_best_model = pickle.load(open(model_filename, 'rb'))
+    saved_best_model.fit(X_train, y_train)
+    model_predictions = saved_best_model.predict(df_current.drop(columns=['ssn', 'sex_enum', 'language_enum']).fillna(0))
 
-    model_linear_predictions = model_linear.predict(df_current.drop(columns=['ssn', 'sex_enum', 'language_enum']).fillna(0))
-    model_elastic_predictions = model_elastic.predict(df_current.drop(columns=['ssn', 'sex_enum', 'language_enum']).fillna(0))
+    # Bayesian model
+    ols_formula, bayesian_formula = get_formulas(X_train, y_train)
+    #normal_trace = bayesian_model(bayesian_formula, df_alumni.drop(columns=['ssn', 'sex_enum', 'language_enum'] + g9_subjects_all).fillna(0))
+    bayesian_formula = "meritvarde ~ g8_sv + g8_sva + g8_en + g8_ma + g8_bi + g8_fy + g8_ke + g8_tk + g8_ge + g8_hi + g8_re + g8_sh + g8_bd + g8_hkk + g8_idh + g8_mu + g8_sl"
 
+    normal_trace, pm = bayesian_model(bayesian_formula, df_alumni[['g8_sv', 'g8_sva', 'g8_en', 'g8_ma', 'g8_bi', 'g8_fy', 'g8_ke', 'g8_tk', 'g8_ge', 'g8_hi',
+                       'g8_re', 'g8_sh', 'g8_bd', 'g8_hkk', 'g8_idh', 'g8_mu', 'g8_sl', 'meritvarde']].fillna(0))
+
+    #pm.traceplot(normal_trace)
+    #fig = plt.gcf()
+    #fig.savefig('traceplot.svg', format='svg')
+
+    #pm.plot_posterior(normal_trace)
+    #plt.show()
+    #fig = plt.gcf()
+    #fig.savefig('posteriorplot.svg', format='svg')
+
+    model_effect('g8_sva', normal_trace, df_alumni[['g8_sv', 'g8_sva', 'g8_en', 'g8_ma', 'g8_bi', 'g8_fy', 'g8_ke', 'g8_tk', 'g8_ge', 'g8_hi',
+                       'g8_re', 'g8_sh', 'g8_bd', 'g8_hkk', 'g8_idh', 'g8_mu', 'g8_sl']].fillna(0))
+
+    # Dataframe manipulation to get a CSV file with the last column as prediction
     df_current.reset_index(inplace=True, drop=True)
-    current_predictions = pd.DataFrame({'mv-linear': model_linear_predictions, 'mv-elastic': model_elastic_predictions})
+    current_predictions = pd.DataFrame({'mv-guess-'+model: model_predictions})
     df_current = df_current.join(current_predictions)
-    df_current.to_csv('df_current.csv')
+    df_current.to_csv('df_current_bestmodel.csv')
 
 
 if __name__ == "__main__":
@@ -414,4 +424,16 @@ eights_guess = pd.DataFrame({'g9_meritvarde_guess': eights_predictions})
 eights_full = eights.join(eights_guess)
 eights_full = eights_full[['ssn', 'g9_meritvarde_guess']]
 eights_full.to_csv('eights_full.csv')
+
+    # Code used before iterating on models and saving to Pickle file
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1)
+    results = evaluate_models(X_train, X_test, y_train, y_test)
+    print(results.sort_values('mae'))
+    
+    model_linear = LinearRegression(); model_linear.fit(X_train, y_train)
+    model_elastic = ElasticNet(alpha=1.0, l1_ratio=0.5).fit(X_train, y_train); model_elastic.fit(X_train, y_train)
+
+    model_linear_predictions = model_linear.predict(df_current.drop(columns=['ssn', 'sex_enum', 'language_enum']).fillna(0))
+    model_elastic_predictions = model_elastic.predict(df_current.drop(columns=['ssn', 'sex_enum', 'language_enum']).fillna(0))
+    #current_predictions = pd.DataFrame({'mv-linear': model_linear_predictions, 'mv-elastic': model_elastic_predictions})
 """
